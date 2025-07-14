@@ -1,0 +1,102 @@
+import time
+import hmac
+import hashlib
+import requests
+import json
+from urllib.parse import urlencode
+
+API_KEY = 'ضع_مفتاح_API_هنا'
+API_SECRET = 'ضع_SECRET_هنا'
+
+BASE_URL = 'https://testnet.binance.vision'
+SYMBOL = 'BTCUSDT'
+TRADE_QUANTITY = 0.001
+TAKE_PROFIT = 0.02
+STOP_LOSS = 0.01
+
+def get_server_time():
+    return int(time.time() * 1000)
+
+def sign_request(params):
+    query_string = urlencode(params)
+    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    params['signature'] = signature
+    return params
+
+def send_signed_request(method, endpoint, params=None):
+    if params is None:
+        params = {}
+    params['timestamp'] = get_server_time()
+    signed_params = sign_request(params)
+    headers = {'X-MBX-APIKEY': API_KEY}
+    url = f"{BASE_URL}{endpoint}"
+    if method == 'POST':
+        response = requests.post(url, headers=headers, params=signed_params)
+    elif method == 'GET':
+        response = requests.get(url, headers=headers, params=signed_params)
+    elif method == 'DELETE':
+        response = requests.delete(url, headers=headers, params=signed_params)
+    return response.json()
+
+def get_klines():
+    url = f"{BASE_URL}/api/v3/klines"
+    params = {'symbol': SYMBOL, 'interval': '1m', 'limit': 15}
+    response = requests.get(url, params=params)
+    return response.json()
+
+def calculate_indicators():
+    klines = get_klines()
+    closes = [float(k[4]) for k in klines]
+    ema5 = sum(closes[-5:]) / 5
+    ema15 = sum(closes[-15:]) / 15
+    rsi = 50
+    macd = ema5 - ema15
+    return rsi, ema5, ema15, macd, closes[-1]
+
+def place_order(side):
+    params = {
+        'symbol': SYMBOL,
+        'side': side,
+        'type': 'MARKET',
+        'quantity': TRADE_QUANTITY
+    }
+    return send_signed_request('POST', '/api/v3/order', params)
+
+def run_bot():
+    in_position = False
+    entry_price = 0.0
+    while True:
+        try:
+            rsi, ema5, ema15, macd, current_price = calculate_indicators()
+            print(f"📊 RSI: {rsi:.2f} | EMA5: {ema5:.2f} | EMA15: {ema15:.2f} | MACD: {macd:.4f}")
+
+            if not in_position and ema5 > ema15 and macd > 0:
+                print("🚀 إشارة BUY مؤكدة – الدخول الآن")
+                result = place_order('BUY')
+                print("✅ صفقة BUY تمت:", result)
+                entry_price = current_price
+                in_position = True
+
+            elif in_position:
+                change = (current_price - entry_price) / entry_price
+                print(f"🔁 متابعة الصفقة... | الدخول: {entry_price} | الآن: {current_price} | نسبة: {change*100:.2f}%")
+                if change >= TAKE_PROFIT:
+                    print("🟢 الهدف تحقق – غلق الصفقة")
+                    result = place_order('SELL')
+                    print("✅ صفقة SELL تمت:", result)
+                    in_position = False
+                elif change <= -STOP_LOSS:
+                    print("🔴 وقف خسارة – غلق الصفقة")
+                    result = place_order('SELL')
+                    print("✅ صفقة SELL تمت:", result)
+                    in_position = False
+
+            time.sleep(15)
+
+        except Exception as e:
+            print("❌ خطأ:", e)
+            time.sleep(10)
+
+if __name__ == '__main__':
+    run_bot()
+    
